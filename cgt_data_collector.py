@@ -1,9 +1,8 @@
-# CGT Data Collection Backend - Complete Fixed Version
+# CGT Data Collection Backend - Lightweight Version (No Pandas)
 # Save as: cgt_data_collector.py
 
 import asyncio
 import aiohttp
-import pandas as pd
 from datetime import datetime, timedelta
 import json
 import re
@@ -187,24 +186,6 @@ class FDADataCollector:
             logger.error(f"Error fetching FDA approvals: {e}")
             return []
     
-    async def search_company_drugs(self, company_name: str) -> List[Dict]:
-        """Search for all drugs by a specific company"""
-        endpoint = f"{self.base_url}/drug/drugsfda.json"
-        
-        params = {
-            'search': f'sponsor_name:"{company_name}"',
-            'limit': 50
-        }
-        
-        try:
-            async with self.session.get(endpoint, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return self._process_drug_approvals(data)
-        except Exception as e:
-            logger.error(f"Error searching company drugs for {company_name}: {e}")
-            return []
-    
     def _process_drug_approvals(self, fda_data: Dict) -> List[Dict]:
         """Process FDA drug approval data"""
         approvals = []
@@ -258,7 +239,7 @@ class ClinicalTrialsCollector:
             'NCTId', 'BriefTitle', 'OverallStatus', 'Phase', 
             'StudyType', 'Condition', 'InterventionName',
             'PrimaryCompletionDate', 'StudyFirstPostDate',
-            'LeadSponsorName', 'SecondaryId', 'LocationCountry'
+            'LeadSponsorName', 'SecondaryId'
         ]
         
         params = {
@@ -297,8 +278,7 @@ class ClinicalTrialsCollector:
                     'intervention': ', '.join(trial.get('InterventionName', [])),
                     'completion_date': self._safe_get(trial, 'PrimaryCompletionDate', 0),
                     'start_date': self._safe_get(trial, 'StudyFirstPostDate', 0),
-                    'sponsor': self._safe_get(trial, 'LeadSponsorName', 0),
-                    'countries': ', '.join(trial.get('LocationCountry', []))
+                    'sponsor': self._safe_get(trial, 'LeadSponsorName', 0)
                 }
                 trials.append(processed_trial)
             except Exception as e:
@@ -315,119 +295,6 @@ class ClinicalTrialsCollector:
         except:
             return ''
 
-class CompanyWebsiteScraper:
-    """Scrape company websites for additional data"""
-    
-    def __init__(self):
-        self.session = None
-        
-    async def __aenter__(self):
-        timeout = aiohttp.ClientTimeout(total=20)
-        self.session = aiohttp.ClientSession(
-            timeout=timeout,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        )
-        return self
-        
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
-    
-    async def get_company_website(self, symbol: str) -> Optional[str]:
-        """Get company website from Yahoo Finance"""
-        url = f"https://finance.yahoo.com/quote/{symbol}/profile"
-        
-        try:
-            async with self.session.get(url) as response:
-                if response.status == 200:
-                    soup = BeautifulSoup(await response.text(), 'html.parser')
-                    
-                    # Look for website link
-                    website_elem = soup.find('a', {'data-test': 'website-link'})
-                    if website_elem and website_elem.get('href'):
-                        return website_elem['href']
-                    
-                    # Alternative: look for website in text
-                    for link in soup.find_all('a', href=True):
-                        href = link['href']
-                        if any(domain in href.lower() for domain in ['.com', '.org', '.net']) and 'mailto:' not in href:
-                            if not any(exclude in href.lower() for exclude in ['yahoo', 'sec.gov', 'edgar']):
-                                return href
-                                
-        except Exception as e:
-            logger.error(f"Error getting website for {symbol}: {e}")
-        
-        return None
-    
-    async def scrape_basic_company_data(self, symbol: str, website: str) -> Dict:
-        """Scrape basic company information from website"""
-        try:
-            async with self.session.get(website) as response:
-                if response.status == 200:
-                    soup = BeautifulSoup(await response.text(), 'html.parser')
-                    
-                    return {
-                        'symbol': symbol,
-                        'website': website,
-                        'title': soup.title.string if soup.title else '',
-                        'description': self._extract_description(soup),
-                        'has_pipeline_page': await self._check_pipeline_page(website),
-                        'has_investor_page': await self._check_investor_page(website),
-                        'last_scraped': datetime.now().isoformat()
-                    }
-        except Exception as e:
-            logger.error(f"Error scraping {website}: {e}")
-            
-        return {'symbol': symbol, 'error': 'Failed to scrape'}
-    
-    def _extract_description(self, soup: BeautifulSoup) -> str:
-        """Extract company description from meta tags or content"""
-        # Try meta description first
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
-        if meta_desc and meta_desc.get('content'):
-            return meta_desc['content'][:500]
-        
-        # Try og:description
-        og_desc = soup.find('meta', attrs={'property': 'og:description'})
-        if og_desc and og_desc.get('content'):
-            return og_desc['content'][:500]
-        
-        return ''
-    
-    async def _check_pipeline_page(self, website: str) -> bool:
-        """Check if company has a pipeline page"""
-        pipeline_urls = [
-            f"{website}/pipeline",
-            f"{website}/product-pipeline", 
-            f"{website}/research/pipeline"
-        ]
-        
-        for url in pipeline_urls:
-            try:
-                async with self.session.get(url) as response:
-                    if response.status == 200:
-                        return True
-            except:
-                continue
-        return False
-    
-    async def _check_investor_page(self, website: str) -> bool:
-        """Check if company has an investor relations page"""
-        ir_urls = [
-            f"{website}/investors",
-            f"{website}/investor-relations",
-            f"{website}/ir"
-        ]
-        
-        for url in ir_urls:
-            try:
-                async with self.session.get(url) as response:
-                    if response.status == 200:
-                        return True
-            except:
-                continue
-        return False
-
 class CGTDataOrchestrator:
     """Main orchestrator for collecting all CGT data"""
     
@@ -436,7 +303,6 @@ class CGTDataOrchestrator:
             'companies': [],
             'fda_approvals': [],
             'clinical_trials': [],
-            'company_websites': [],
             'collection_timestamp': None
         }
     
@@ -480,22 +346,6 @@ class CGTDataOrchestrator:
         
         self.data['clinical_trials'] = all_trials
         
-        # Step 4: Scrape company websites
-        logger.info("Step 4: Scraping company websites...")
-        async with CompanyWebsiteScraper() as web_scraper:
-            website_data = []
-            
-            for company in companies[:20]:  # Top 20 companies
-                # Get website URL
-                website = await web_scraper.get_company_website(company.symbol)
-                if website:
-                    # Scrape basic data
-                    company_data = await web_scraper.scrape_basic_company_data(company.symbol, website)
-                    website_data.append(company_data)
-                    await asyncio.sleep(2)  # Be respectful
-        
-        self.data['company_websites'] = website_data
-        
         # Finalize
         self.data['collection_timestamp'] = datetime.now().isoformat()
         
@@ -524,23 +374,44 @@ class CGTDataOrchestrator:
             json.dump(self.data, f, indent=2, default=str)
         logger.info(f"Saved combined data to {combined_file}")
     
-    def to_dataframes(self) -> Dict[str, pd.DataFrame]:
-        """Convert collected data to pandas DataFrames for analysis"""
-        dfs = {}
+    def analyze_data(self) -> Dict:
+        """Simple data analysis without pandas"""
+        analysis = {}
         
-        for key, data in self.data.items():
-            if key != 'collection_timestamp' and data:
-                try:
-                    dfs[key] = pd.DataFrame(data)
-                except Exception as e:
-                    logger.error(f"Error creating DataFrame for {key}: {e}")
+        # Analyze companies
+        companies = self.data.get('companies', [])
+        if companies:
+            # Sort by XBI weight
+            xbi_sorted = sorted([c for c in companies if c.get('xbi_weight')], 
+                              key=lambda x: x['xbi_weight'], reverse=True)
+            
+            analysis['top_xbi_companies'] = xbi_sorted[:10]
+            analysis['total_companies'] = len(companies)
+            analysis['avg_xbi_weight'] = sum(c.get('xbi_weight', 0) for c in companies) / len(companies)
         
-        return dfs
+        # Analyze FDA approvals
+        fda_approvals = self.data.get('fda_approvals', [])
+        if fda_approvals:
+            analysis['total_fda_approvals'] = len(fda_approvals)
+            analysis['recent_approvals'] = fda_approvals[:5]
+        
+        # Analyze clinical trials
+        trials = self.data.get('clinical_trials', [])
+        if trials:
+            analysis['total_trials'] = len(trials)
+            
+            # Count by phase
+            phase_count = {}
+            for trial in trials:
+                phase = trial.get('phase', 'Unknown')
+                phase_count[phase] = phase_count.get(phase, 0) + 1
+            analysis['trials_by_phase'] = phase_count
+        
+        return analysis
 
 # FastAPI Web Server for real-time dashboard
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import uvicorn
 
 app = FastAPI(title="CGT Data Collection API", version="1.0.0")
@@ -559,7 +430,7 @@ global_data_store = {}
 
 @app.get("/")
 async def root():
-    return {"message": "CGT Data Collection API is running"}
+    return {"message": "CGT Data Collection API is running", "status": "healthy"}
 
 @app.get("/api/companies")
 async def get_companies():
@@ -576,11 +447,6 @@ async def get_clinical_trials():
     """Get clinical trials data"""
     return global_data_store.get('clinical_trials', [])
 
-@app.get("/api/company-websites")
-async def get_company_websites():
-    """Get scraped company website data"""
-    return global_data_store.get('company_websites', [])
-
 @app.get("/api/stats")
 async def get_stats():
     """Get collection statistics"""
@@ -588,9 +454,18 @@ async def get_stats():
         'companies_count': len(global_data_store.get('companies', [])),
         'fda_approvals_count': len(global_data_store.get('fda_approvals', [])),
         'clinical_trials_count': len(global_data_store.get('clinical_trials', [])),
-        'websites_scraped': len(global_data_store.get('company_websites', [])),
-        'last_updated': global_data_store.get('collection_timestamp')
+        'last_updated': global_data_store.get('collection_timestamp'),
+        'status': 'active'
     }
+
+@app.get("/api/analysis")
+async def get_analysis():
+    """Get data analysis"""
+    if global_data_store:
+        orchestrator = CGTDataOrchestrator()
+        orchestrator.data = global_data_store
+        return orchestrator.analyze_data()
+    return {}
 
 @app.post("/api/collect")
 async def trigger_collection():
@@ -602,7 +477,7 @@ async def trigger_collection():
         # Update global store
         global_data_store.update(data)
         
-        return {"status": "success", "message": "Data collection completed"}
+        return {"status": "success", "message": "Data collection completed", "timestamp": data['collection_timestamp']}
     
     except Exception as e:
         logger.error(f"Collection failed: {e}")
@@ -624,14 +499,10 @@ async def get_company_details(symbol: str):
     trials = [t for t in global_data_store.get('clinical_trials', [])
               if company['name'].lower() in t.get('sponsor', '').lower()]
     
-    website_data = next((w for w in global_data_store.get('company_websites', [])
-                        if w['symbol'] == symbol.upper()), {})
-    
     return {
         'company': company,
         'fda_approvals': fda_data,
-        'clinical_trials': trials,
-        'website_data': website_data
+        'clinical_trials': trials
     }
 
 # Background task to collect data periodically
@@ -670,7 +541,7 @@ async def startup_event():
 # Command-line interface
 async def main():
     """Main function for command-line usage"""
-    print("🧬 CGT Data Collector - Free Tier Implementation")
+    print("🧬 CGT Data Collector - Lightweight Version")
     print("=" * 50)
     
     orchestrator = CGTDataOrchestrator()
@@ -684,26 +555,18 @@ async def main():
         print(f"   Companies: {len(data['companies'])}")
         print(f"   FDA Approvals: {len(data['fda_approvals'])}")
         print(f"   Clinical Trials: {len(data['clinical_trials'])}")
-        print(f"   Websites Scraped: {len(data['company_websites'])}")
         
         # Save to files
         orchestrator.save_to_files()
         print(f"\n💾 Data saved to 'data/' directory")
         
-        # Convert to DataFrames for analysis
-        dfs = orchestrator.to_dataframes()
-        print(f"\n📈 DataFrames created: {list(dfs.keys())}")
+        # Show analysis
+        analysis = orchestrator.analyze_data()
         
-        # Show sample data
-        if 'companies' in dfs and not dfs['companies'].empty:
+        if 'top_xbi_companies' in analysis:
             print(f"\n🏢 Top 10 Companies by XBI Weight:")
-            top_companies = dfs['companies'].nlargest(10, 'xbi_weight')[['symbol', 'name', 'xbi_weight', 'market_cap']]
-            print(top_companies.to_string(index=False))
-        
-        if 'fda_approvals' in dfs and not dfs['fda_approvals'].empty:
-            print(f"\n💊 Recent FDA Approvals:")
-            recent_approvals = dfs['fda_approvals'][['drug_name', 'company', 'approval_date']].head(5)
-            print(recent_approvals.to_string(index=False))
+            for i, company in enumerate(analysis['top_xbi_companies'][:10], 1):
+                print(f"   {i}. {company['symbol']} - {company['name']} ({company['xbi_weight']:.2f}%)")
         
         print(f"\n✅ Collection completed successfully!")
         
