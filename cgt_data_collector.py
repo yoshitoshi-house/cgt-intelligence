@@ -1,5 +1,5 @@
-# CGT Data Collection Backend - Lightweight Version (No Pandas)
-# Save as: cgt_data_collector.py
+# Complete Full-Stack CGT Intelligence App
+# Save as: app.py
 
 import asyncio
 import aiohttp
@@ -208,9 +208,7 @@ class FDADataCollector:
                     'approval_date': latest_submission.get('submission_status_date'),
                     'application_type': latest_submission.get('submission_type'),
                     'submission_status': latest_submission.get('submission_status'),
-                    'marketing_status': main_product.get('marketing_status'),
-                    'route': main_product.get('route', []),
-                    'dosage_form': main_product.get('dosage_form')
+                    'marketing_status': main_product.get('marketing_status')
                 }
                 approvals.append(approval)
                 
@@ -239,7 +237,7 @@ class ClinicalTrialsCollector:
             'NCTId', 'BriefTitle', 'OverallStatus', 'Phase', 
             'StudyType', 'Condition', 'InterventionName',
             'PrimaryCompletionDate', 'StudyFirstPostDate',
-            'LeadSponsorName', 'SecondaryId'
+            'LeadSponsorName'
         ]
         
         params = {
@@ -322,8 +320,8 @@ class CGTDataOrchestrator:
                 'name': c.name,
                 'website': c.website,
                 'market_cap': c.market_cap,
-                'xbi_weight': c.xbi_weight,
-                'nbi_weight': c.nbi_weight
+                'xbi_weight': c.xbi_weight or 0,
+                'nbi_weight': c.nbi_weight or 0
             } for c in companies[:max_companies]
         ]
         
@@ -339,7 +337,7 @@ class CGTDataOrchestrator:
         ct_collector = ClinicalTrialsCollector()
         all_trials = []
         
-        for company in companies[:10]:  # Top 10 companies by ETF weight
+        for company in companies[:5]:  # Top 5 companies by ETF weight
             trials = await ct_collector.search_company_trials(company.name)
             all_trials.extend(trials)
             await asyncio.sleep(1)  # Be respectful to the API
@@ -353,70 +351,16 @@ class CGTDataOrchestrator:
         logger.info(f"Data collection completed in {elapsed_time:.1f} seconds")
         
         return self.data
-    
-    def save_to_files(self, output_dir: str = "data"):
-        """Save collected data to JSON files"""
-        import os
-        
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save each dataset
-        for key, data in self.data.items():
-            if key != 'collection_timestamp':
-                filename = f"{output_dir}/{key}_{datetime.now().strftime('%Y%m%d')}.json"
-                with open(filename, 'w') as f:
-                    json.dump(data, f, indent=2, default=str)
-                logger.info(f"Saved {len(data)} records to {filename}")
-        
-        # Save combined data
-        combined_file = f"{output_dir}/cgt_data_combined_{datetime.now().strftime('%Y%m%d')}.json"
-        with open(combined_file, 'w') as f:
-            json.dump(self.data, f, indent=2, default=str)
-        logger.info(f"Saved combined data to {combined_file}")
-    
-    def analyze_data(self) -> Dict:
-        """Simple data analysis without pandas"""
-        analysis = {}
-        
-        # Analyze companies
-        companies = self.data.get('companies', [])
-        if companies:
-            # Sort by XBI weight
-            xbi_sorted = sorted([c for c in companies if c.get('xbi_weight')], 
-                              key=lambda x: x['xbi_weight'], reverse=True)
-            
-            analysis['top_xbi_companies'] = xbi_sorted[:10]
-            analysis['total_companies'] = len(companies)
-            analysis['avg_xbi_weight'] = sum(c.get('xbi_weight', 0) for c in companies) / len(companies)
-        
-        # Analyze FDA approvals
-        fda_approvals = self.data.get('fda_approvals', [])
-        if fda_approvals:
-            analysis['total_fda_approvals'] = len(fda_approvals)
-            analysis['recent_approvals'] = fda_approvals[:5]
-        
-        # Analyze clinical trials
-        trials = self.data.get('clinical_trials', [])
-        if trials:
-            analysis['total_trials'] = len(trials)
-            
-            # Count by phase
-            phase_count = {}
-            for trial in trials:
-                phase = trial.get('phase', 'Unknown')
-                phase_count[phase] = phase_count.get(phase, 0) + 1
-            analysis['trials_by_phase'] = phase_count
-        
-        return analysis
 
-# FastAPI Web Server for real-time dashboard
-from fastapi import FastAPI, HTTPException
+# FastAPI with HTML Frontend
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-app = FastAPI(title="CGT Data Collection API", version="1.0.0")
+app = FastAPI(title="CGT Intelligence Dashboard", version="1.0.0")
 
-# Enable CORS for frontend
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -428,9 +372,293 @@ app.add_middleware(
 # Global data store
 global_data_store = {}
 
-@app.get("/")
-async def root():
-    return {"message": "CGT Data Collection API is running", "status": "healthy"}
+# HTML Template for the dashboard
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CGT Intelligence Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Header -->
+    <div class="bg-white shadow-sm border-b">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-4">
+                <div class="flex items-center space-x-2">
+                    <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
+                        <span class="text-white font-bold">🧬</span>
+                    </div>
+                    <h1 class="text-2xl font-bold text-gray-900">CGT Intelligence</h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button onclick="collectData()" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                        Refresh Data
+                    </button>
+                    <div id="lastUpdated" class="text-sm text-gray-500"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center">📈</div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Companies Tracked</p>
+                        <p id="companiesCount" class="text-2xl font-semibold text-gray-900">0</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">💊</div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">FDA Approvals</p>
+                        <p id="fdaCount" class="text-2xl font-semibold text-gray-900">0</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">🔬</div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Clinical Trials</p>
+                        <p id="trialsCount" class="text-2xl font-semibold text-gray-900">0</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-orange-600 rounded-full flex items-center justify-center">⚡</div>
+                    </div>
+                    <div class="ml-4">
+                        <p class="text-sm font-medium text-gray-500">Status</p>
+                        <p id="systemStatus" class="text-2xl font-semibold text-gray-900">Ready</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading indicator -->
+        <div id="loadingIndicator" class="hidden text-center py-8">
+            <div class="loading w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full mx-auto"></div>
+            <p class="mt-2 text-gray-600">Collecting biotech intelligence data...</p>
+        </div>
+
+        <!-- Companies Table -->
+        <div class="bg-white rounded-lg shadow mb-8">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h3 class="text-lg font-medium text-gray-900">Top Biotech Companies (XBI/NBI ETFs)</h3>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Market Cap</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">XBI Weight</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NBI Weight</th>
+                        </tr>
+                    </thead>
+                    <tbody id="companiesTable" class="bg-white divide-y divide-gray-200">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- FDA Approvals -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white rounded-lg shadow">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-gray-900">Recent FDA Approvals</h3>
+                </div>
+                <div id="fdaApprovals" class="p-6">
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-gray-900">Active Clinical Trials</h3>
+                </div>
+                <div id="clinicalTrials" class="p-6">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isCollecting = false;
+
+        async function loadDashboard() {
+            try {
+                const statsResponse = await fetch('/api/stats');
+                const stats = await statsResponse.json();
+                
+                // Update stats
+                document.getElementById('companiesCount').textContent = stats.companies_count || 0;
+                document.getElementById('fdaCount').textContent = stats.fda_approvals_count || 0;
+                document.getElementById('trialsCount').textContent = stats.clinical_trials_count || 0;
+                document.getElementById('systemStatus').textContent = stats.companies_count > 0 ? 'Active' : 'Ready';
+                
+                if (stats.last_updated) {
+                    const lastUpdated = new Date(stats.last_updated).toLocaleString();
+                    document.getElementById('lastUpdated').textContent = `Updated: ${lastUpdated}`;
+                }
+
+                // Load companies if available
+                if (stats.companies_count > 0) {
+                    await loadCompanies();
+                    await loadFDAApprovals();
+                    await loadClinicalTrials();
+                }
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+            }
+        }
+
+        async function loadCompanies() {
+            try {
+                const response = await fetch('/api/companies');
+                const companies = await response.json();
+                
+                const tableBody = document.getElementById('companiesTable');
+                tableBody.innerHTML = '';
+                
+                companies.slice(0, 20).forEach(company => {
+                    const row = `
+                        <tr>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${company.symbol}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${company.name}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${company.market_cap || 'N/A'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${(company.xbi_weight || 0).toFixed(2)}%</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${(company.nbi_weight || 0).toFixed(2)}%</td>
+                        </tr>
+                    `;
+                    tableBody.innerHTML += row;
+                });
+            } catch (error) {
+                console.error('Error loading companies:', error);
+            }
+        }
+
+        async function loadFDAApprovals() {
+            try {
+                const response = await fetch('/api/fda-approvals');
+                const approvals = await response.json();
+                
+                const container = document.getElementById('fdaApprovals');
+                container.innerHTML = '';
+                
+                if (approvals.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500">No recent FDA approvals found.</p>';
+                    return;
+                }
+                
+                approvals.slice(0, 5).forEach(approval => {
+                    const item = `
+                        <div class="mb-4 p-3 border border-gray-200 rounded-lg">
+                            <h4 class="font-medium text-gray-900">${approval.drug_name}</h4>
+                            <p class="text-sm text-gray-600">${approval.company}</p>
+                            <p class="text-xs text-gray-500">${approval.approval_date || 'Date pending'}</p>
+                        </div>
+                    `;
+                    container.innerHTML += item;
+                });
+            } catch (error) {
+                console.error('Error loading FDA approvals:', error);
+            }
+        }
+
+        async function loadClinicalTrials() {
+            try {
+                const response = await fetch('/api/clinical-trials');
+                const trials = await response.json();
+                
+                const container = document.getElementById('clinicalTrials');
+                container.innerHTML = '';
+                
+                if (trials.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500">No clinical trials data available.</p>';
+                    return;
+                }
+                
+                trials.slice(0, 5).forEach(trial => {
+                    const item = `
+                        <div class="mb-4 p-3 border border-gray-200 rounded-lg">
+                            <h4 class="font-medium text-gray-900">${trial.title}</h4>
+                            <p class="text-sm text-gray-600">${trial.sponsor}</p>
+                            <div class="flex space-x-2 mt-1">
+                                <span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">${trial.phase || 'N/A'}</span>
+                                <span class="bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded">${trial.status}</span>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML += item;
+                });
+            } catch (error) {
+                console.error('Error loading clinical trials:', error);
+            }
+        }
+
+        async function collectData() {
+            if (isCollecting) return;
+            
+            isCollecting = true;
+            document.getElementById('loadingIndicator').classList.remove('hidden');
+            document.getElementById('systemStatus').textContent = 'Collecting...';
+            
+            try {
+                const response = await fetch('/api/collect', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    await loadDashboard();
+                }
+            } catch (error) {
+                console.error('Error collecting data:', error);
+                alert('Error collecting data. Please try again.');
+            } finally {
+                isCollecting = false;
+                document.getElementById('loadingIndicator').classList.add('hidden');
+            }
+        }
+
+        // Initialize dashboard
+        loadDashboard();
+        
+        // Auto-refresh every 5 minutes
+        setInterval(loadDashboard, 5 * 60 * 1000);
+    </script>
+</body>
+</html>
+"""
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the HTML dashboard"""
+    return HTML_TEMPLATE
 
 @app.get("/api/companies")
 async def get_companies():
@@ -458,15 +686,6 @@ async def get_stats():
         'status': 'active'
     }
 
-@app.get("/api/analysis")
-async def get_analysis():
-    """Get data analysis"""
-    if global_data_store:
-        orchestrator = CGTDataOrchestrator()
-        orchestrator.data = global_data_store
-        return orchestrator.analyze_data()
-    return {}
-
 @app.post("/api/collect")
 async def trigger_collection():
     """Trigger new data collection"""
@@ -481,7 +700,7 @@ async def trigger_collection():
     
     except Exception as e:
         logger.error(f"Collection failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"status": "error", "message": str(e)}
 
 @app.get("/api/company/{symbol}")
 async def get_company_details(symbol: str):
@@ -490,7 +709,7 @@ async def get_company_details(symbol: str):
     company = next((c for c in companies if c['symbol'] == symbol.upper()), None)
     
     if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+        return {"error": "Company not found"}
     
     # Get related data
     fda_data = [d for d in global_data_store.get('fda_approvals', []) 
@@ -525,61 +744,11 @@ async def periodic_collection():
 @app.on_event("startup")
 async def startup_event():
     """Run initial data collection on startup"""
-    # Run initial collection
-    try:
-        logger.info("Running initial data collection...")
-        orchestrator = CGTDataOrchestrator()
-        data = await orchestrator.collect_all_data(max_companies=30)
-        global_data_store.update(data)
-        logger.info("Initial collection completed")
-    except Exception as e:
-        logger.error(f"Initial collection failed: {e}")
-    
     # Start background collection task
     asyncio.create_task(periodic_collection())
-
-# Command-line interface
-async def main():
-    """Main function for command-line usage"""
-    print("🧬 CGT Data Collector - Lightweight Version")
-    print("=" * 50)
-    
-    orchestrator = CGTDataOrchestrator()
-    
-    try:
-        # Collect all data
-        data = await orchestrator.collect_all_data(max_companies=50)
-        
-        # Print summary
-        print(f"\n📊 Collection Summary:")
-        print(f"   Companies: {len(data['companies'])}")
-        print(f"   FDA Approvals: {len(data['fda_approvals'])}")
-        print(f"   Clinical Trials: {len(data['clinical_trials'])}")
-        
-        # Save to files
-        orchestrator.save_to_files()
-        print(f"\n💾 Data saved to 'data/' directory")
-        
-        # Show analysis
-        analysis = orchestrator.analyze_data()
-        
-        if 'top_xbi_companies' in analysis:
-            print(f"\n🏢 Top 10 Companies by XBI Weight:")
-            for i, company in enumerate(analysis['top_xbi_companies'][:10], 1):
-                print(f"   {i}. {company['symbol']} - {company['name']} ({company['xbi_weight']:.2f}%)")
-        
-        print(f"\n✅ Collection completed successfully!")
-        
-    except Exception as e:
-        print(f"\n❌ Error during collection: {e}")
-        logger.error(f"Main execution failed: {e}")
 
 if __name__ == "__main__":
     import sys
     
-    if len(sys.argv) > 1 and sys.argv[1] == "server":
-        # Run as web server
-        uvicorn.run(app, host="0.0.0.0", port=8000)
-    else:
-        # Run as command-line script
-        asyncio.run(main())
+    # Run as web server
+    uvicorn.run(app, host="0.0.0.0", port=8000)
