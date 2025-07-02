@@ -338,9 +338,10 @@ class CGTDataOrchestrator:
         all_trials = []
         
         for company in companies[:5]:  # Top 5 companies by ETF weight
-            trials = await ct_collector.search_company_trials(company.name)
-            all_trials.extend(trials)
-            await asyncio.sleep(1)  # Be respectful to the API
+            if company and company.name:  # Add safety check
+                trials = await ct_collector.search_company_trials(company.name)
+                all_trials.extend(trials)
+                await asyncio.sleep(1)  # Be respectful to the API
         
         self.data['clinical_trials'] = all_trials
         
